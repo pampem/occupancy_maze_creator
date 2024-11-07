@@ -5,6 +5,7 @@
  */
 #include <occupancy_maze_simulator/occupancy_maze_simulator.hpp>
 
+#include <queue>
 #include <random>
 
 namespace occupancy_maze_simulator
@@ -23,11 +24,26 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
   twist_subscriber_ = this->create_subscription<geometry_msgs::msg::Twist>(
     "cmd_vel", 10, std::bind(&OccupancyMazeSimulator::twist_callback, this, std::placeholders::_1));
 
-  auto obstacles = generate_maze_obstacles(10, 1, {50, 50});
-  publish_maze(obstacles, {50, 50}, 1.0);
+  // Start and goal positions TODO: make this parameterizable
+  std::pair<int, int> start{1, 1};
+  std::pair<int, int> goal{48, 48};
+
+  nav_msgs::msg::OccupancyGrid grid_map;
+  std::vector<Obstacle> obstacles;
+  do {
+    // TODO(Izumita): Make this parameterizable
+    obstacles = generate_maze_obstacles(10, 1, {50, 50});
+    grid_map = create_grid_map(obstacles, {50, 50}, 1.0);
+    if (!is_path_to_goal(grid_map, start, goal)) {
+      RCLCPP_WARN(this->get_logger(), "No path to the goal exists. Regenerating obstacles.");
+    }
+  } while (!is_path_to_goal(grid_map, start, goal));
+
+  RCLCPP_INFO(this->get_logger(), "A path to the goal exists.");
+  occupancy_grid_publisher_->publish(grid_map);  // 最終的に有効なGridmapをパブリッシュ
 }
 
-void OccupancyMazeSimulator::publish_maze(
+nav_msgs::msg::OccupancyGrid OccupancyMazeSimulator::create_grid_map(
   const std::vector<Obstacle> & obstacles, const std::pair<int, int> & area_size, double resolution)
 {
   nav_msgs::msg::OccupancyGrid grid_msg;
@@ -52,8 +68,46 @@ void OccupancyMazeSimulator::publish_maze(
       RCLCPP_WARN(this->get_logger(), "Obstacle out of grid bounds at (%d, %d)", cell_x, cell_y);
     }
   }
-  RCLCPP_INFO(this->get_logger(), "GridMap Published ");
-  occupancy_grid_publisher_->publish(grid_msg);
+  return grid_msg;
+}
+
+bool OccupancyMazeSimulator::is_path_to_goal(
+  const nav_msgs::msg::OccupancyGrid & grid_map, const std::pair<int, int> & start,
+  const std::pair<int, int> & goal)
+{
+  const int width = grid_map.info.width;
+  const int height = grid_map.info.height;
+  const auto & data = grid_map.data;
+
+  std::vector<std::vector<bool>> visited(width, std::vector<bool>(height, false));
+  std::queue<std::pair<int, int>> queue;
+  queue.push(start);
+  visited[start.first][start.second] = true;
+
+  const int dx[] = {1, -1, 0, 0};
+  const int dy[] = {0, 0, 1, -1};
+
+  while (!queue.empty()) {
+    auto [x, y] = queue.front();
+    queue.pop();
+
+    if (x == goal.first && y == goal.second) {
+      return true;
+    }
+
+    for (int i = 0; i < 4; ++i) {
+      int nx = x + dx[i];
+      int ny = y + dy[i];
+
+      if (
+        nx >= 0 && nx < width && ny >= 0 && ny < height &&
+        data[ny * width + nx] == 0 && !visited[nx][ny]) {
+        queue.emplace(nx, ny);
+        visited[nx][ny] = true;
+      }
+    }
+  }
+  return false;
 }
 
 Obstacle OccupancyMazeSimulator::create_obstacle(
