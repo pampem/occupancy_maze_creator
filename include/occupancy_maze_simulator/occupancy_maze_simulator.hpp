@@ -48,8 +48,8 @@ private:
   static std::vector<Obstacle> generate_random_obstacles(
     int num_obstacles, const std::pair<int, int> & area_size);
 
-  static std::vector<Obstacle> generate_maze_obstacles(
-    float cell_size, const std::pair<int, int> & area_size);
+  std::vector<Obstacle> generate_maze_obstacles(
+    float cell_size, const std::pair<int, int> & area_size) const;
 
   static Obstacle create_obstacle(double x, double y, double width, double height, double angle);
 
@@ -57,13 +57,32 @@ private:
     const nav_msgs::msg::OccupancyGrid & grid_map, const std::pair<int, int> & start,
     const std::pair<int, int> & goal);
 
+  void simulate_robot_position(geometry_msgs::msg::Twist::SharedPtr msg);
+  // Alternative option to simulate robot movement
+  void simulate_drone_movement(geometry_msgs::msg::Twist::SharedPtr target_twist);
+
+  void publish_pose();
+
+  void publish_gridmap();
+
+  rclcpp::TimerBase::SharedPtr publish_pose_timer_;
+  rclcpp::TimerBase::SharedPtr publish_gridmap_timer_;
   nav_msgs::msg::OccupancyGrid occupancy_grid_;
+  rclcpp::Time last_update_time_;
+
+  double yaw_;
+  double robot_x_;
+  double robot_y_;
+  double current_linear_velocity_;
+  double current_angular_velocity_;
 
   int num_cells_x_;
   int num_cells_y_;
   std::pair<int, int> start_position_;
   std::pair<int, int> goal_position_;
   float cell_size_;
+  float maze_density_;
+  nav_msgs::msg::OccupancyGrid grid_map_;
 
   tf2_ros::Buffer tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

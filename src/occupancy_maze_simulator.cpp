@@ -22,6 +22,7 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
   this->declare_parameter<float>("gridmap.y", 50);
   this->declare_parameter<std::vector<int>>("start_position", {1, 1});
   this->declare_parameter<std::vector<int>>("goal_position", {48, 48});
+  this->declare_parameter<float>("maze.density", 0.3F);  // 障害物の密度（0.0～1.0）
 
   std::string obstacle_mode = this->get_parameter("obstacle_mode").as_string();
   float resolution = this->get_parameter("gridmap.resolution").as_double();
@@ -29,6 +30,7 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
   float gridmap_y = this->get_parameter("gridmap.y").as_double();
   auto start_vec = this->get_parameter("start_position").as_integer_array();
   auto goal_vec = this->get_parameter("goal_position").as_integer_array();
+  maze_density_ = this->get_parameter("maze.density").as_double();
 
   num_cells_x_ = static_cast<int>(gridmap_x / resolution);
   num_cells_y_ = static_cast<int>(gridmap_y / resolution);
@@ -36,15 +38,17 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
   if (start_vec.size() == 2) start_position_ = {start_vec[0], start_vec[1]};
   if (goal_vec.size() == 2) goal_position_ = {goal_vec[0], goal_vec[1]};
 
-  occupancy_grid_publisher_ =
-    this->create_publisher<nav_msgs::msg::OccupancyGrid>("occupancy_grid", 10);
-  pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("pose", 10);
+  occupancy_grid_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("gridmap", 10);
+  pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("glim_ros/pose", 10);
   goal_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("goal_position", 10);
 
   twist_subscriber_ = this->create_subscription<geometry_msgs::msg::Twist>(
-    "cmd_vel", 10, std::bind(&OccupancyMazeSimulator::twist_callback, this, std::placeholders::_1));
+    "drone1/mavros/setpoint_velocity/cmd_vel_unstamped", 10,
+    std::bind(&OccupancyMazeSimulator::twist_callback, this, std::placeholders::_1));
 
-  nav_msgs::msg::OccupancyGrid grid_map;
+  publish_pose_timer_ = this->create_wall_timer(
+    std::chrono::milliseconds(100), std::bind(&OccupancyMazeSimulator::publish_pose, this));
+
   std::vector<Obstacle> obstacles;
   int count = 0;
   do {
@@ -57,8 +61,8 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
       obstacles = generate_maze_obstacles(cell_size_, {num_cells_x_, num_cells_y_});
     }
 
-    grid_map = create_grid_map(obstacles, {num_cells_x_, num_cells_y_}, cell_size_);
-    if (!is_path_to_goal(grid_map, start_position_, goal_position_)) {
+    grid_map_ = create_grid_map(obstacles, {num_cells_x_, num_cells_y_}, cell_size_);
+    if (!is_path_to_goal(grid_map_, start_position_, goal_position_)) {
       RCLCPP_WARN(this->get_logger(), "No path to the goal exists. Regenerating obstacles.");
       ++count;
     }
@@ -66,11 +70,14 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
       RCLCPP_ERROR(this->get_logger(), "Couldn't create valid obstacles. Check your parameters.");
       break;
     }
-  } while (!is_path_to_goal(grid_map, start_position_, goal_position_));
+  } while (!is_path_to_goal(grid_map_, start_position_, goal_position_));
   if (count < 100) {
     RCLCPP_INFO(this->get_logger(), "A path to the goal exists.");
-    occupancy_grid_publisher_->publish(grid_map);  // 有効なGridmapをパブリッシュ
+    // occupancy_grid_publisher_->publish(grid_map);  // 有効なGridmapをパブリッシュ
+    publish_gridmap_timer_ = this->create_wall_timer(
+    std::chrono::seconds(1), std::bind(&OccupancyMazeSimulator::publish_gridmap, this));
   }
+  last_update_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
 }
 
 nav_msgs::msg::OccupancyGrid OccupancyMazeSimulator::create_grid_map(
@@ -167,7 +174,7 @@ std::vector<Obstacle> OccupancyMazeSimulator::generate_random_obstacles(
 }
 
 std::vector<Obstacle> OccupancyMazeSimulator::generate_maze_obstacles(
-  float cell_size, const std::pair<int, int> & area_size)
+  float cell_size, const std::pair<int, int> & area_size) const
 {
   std::vector<Obstacle> obstacles;
   int num_cells_x = area_size.first;
@@ -175,7 +182,7 @@ std::vector<Obstacle> OccupancyMazeSimulator::generate_maze_obstacles(
 
   std::random_device rd;
   std::mt19937 gen(rd());
-  std::uniform_int_distribution<> dist(0, 3);  // 0から3の乱数生成
+  std::uniform_real_distribution<> dist(0.0, 1.0);  // 0.0～1.0の乱数生成
 
   for (int i = 0; i < num_cells_x; ++i) {
     for (int j = 0; j < num_cells_y; ++j) {
@@ -185,11 +192,11 @@ std::vector<Obstacle> OccupancyMazeSimulator::generate_maze_obstacles(
         continue;
       }
 
-      if (dist(gen) == 0) {  // ランダムに障害物を配置
+      if (dist(gen) < maze_density_) {  // `maze_density`の確率で障害物を配置
         double x = i * cell_size + static_cast<double>(cell_size) / 2.0;
         double y = j * cell_size + static_cast<double>(cell_size) / 2.0;
-        double width = (dist(gen) % 2 == 0) ? cell_size : 2 + (dist(gen) % 2);
-        double height = (width == cell_size) ? 2 + (dist(gen) % 2) : cell_size;
+        double width = (dist(gen) > 0.5) ? cell_size : cell_size + 2;
+        double height = (width == cell_size) ? cell_size + 2 : cell_size;
         obstacles.push_back(create_obstacle(x, y, width, height, 0));
       }
     }
@@ -197,12 +204,134 @@ std::vector<Obstacle> OccupancyMazeSimulator::generate_maze_obstacles(
   return obstacles;
 }
 
+void OccupancyMazeSimulator::publish_pose()
+{
+  geometry_msgs::msg::PoseStamped pose_msg;
+  pose_msg.header.stamp = this->get_clock()->now();
+  pose_msg.header.frame_id = "odom";
+  pose_msg.pose.position.x = robot_x_;
+  pose_msg.pose.position.y = robot_y_;
+  pose_msg.pose.position.z = 0.0;
+
+  tf2::Quaternion q;
+  q.setRPY(0, 0, yaw_);
+  pose_msg.pose.orientation.x = q.x();
+  pose_msg.pose.orientation.y = q.y();
+  pose_msg.pose.orientation.z = q.z();
+  pose_msg.pose.orientation.w = q.w();
+
+  pose_publisher_->publish(pose_msg);
+
+  geometry_msgs::msg::PoseStamped goal_msg;
+  goal_msg.header.stamp = this->get_clock()->now();
+  goal_msg.header.frame_id = "odom";
+  goal_msg.pose.position.x = goal_position_.first * cell_size_;
+  goal_msg.pose.position.y = goal_position_.second * cell_size_;
+  goal_msg.pose.position.z = 0.0;
+
+  goal_publisher_->publish(goal_msg);
+}
+
 void OccupancyMazeSimulator::twist_callback(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
   RCLCPP_INFO(
     this->get_logger(), "Received Twist message: linear=%f, angular=%f", msg->linear.x,
     msg->angular.z);
+  simulate_robot_position(msg);
+  // simulate_drone_movement(msg);
 }
+
+void OccupancyMazeSimulator::publish_gridmap()
+{
+  occupancy_grid_publisher_->publish(grid_map_);
+}
+
+// Default option for robot position calculation
+void OccupancyMazeSimulator::simulate_robot_position(geometry_msgs::msg::Twist::SharedPtr msg)
+{
+  auto wall_clock = rclcpp::Clock(RCL_STEADY_TIME);
+  auto current_time = wall_clock.now();
+
+  double dt = (current_time - last_update_time_).seconds();
+  last_update_time_ = current_time;
+
+  // Update position based on both x and y velocities and orientation
+  double delta_x = msg->linear.x * std::cos(yaw_) * dt - msg->linear.y * std::sin(yaw_) * dt;
+  double delta_y = msg->linear.x * std::sin(yaw_) * dt + msg->linear.y * std::cos(yaw_) * dt;
+  double delta_yaw = msg->angular.z * dt;
+
+  // Update robot's position and orientation
+  robot_x_ += delta_x;
+  robot_y_ += delta_y;
+  yaw_ += delta_yaw;
+}
+
+// Alt option for robot position simulation Not TESTED, so comment out for now
+// void OccupancyMazeSimulator::simulate_drone_movement(
+//   geometry_msgs::msg::Twist::SharedPtr target_twist)
+// {
+//   // シミュレーションのパラメータ
+//   const double max_linear_acceleration = 0.5;   // 最大線形加速度 (m/s^2)
+//   const double max_angular_acceleration = 0.5;  // 最大角加速度 (rad/s^2)
+//   const double drift_noise_std_dev = 0.05;      // ドリフトノイズの標準偏差
+
+//   auto wall_clock = rclcpp::Clock(RCL_STEADY_TIME);
+//   auto current_time = wall_clock.now();
+
+//   double dt = (current_time - last_update_time_).seconds();
+//   last_update_time_ = current_time;
+
+//   // 目標の線形速度と角速度
+//   double target_linear_x = target_twist->linear.x;
+//   double target_angular_z = target_twist->angular.z;
+
+//   // 慣性を考慮して、現在の速度を目標速度に段階的に近づける
+//   double linear_acceleration = std::clamp(
+//     (target_linear_x - current_linear_velocity_) / dt, -max_linear_acceleration,
+//     max_linear_acceleration);
+//   double angular_acceleration = std::clamp(
+//     (target_angular_z - current_angular_velocity_) / dt, -max_angular_acceleration,
+//     max_angular_acceleration);
+
+//   current_linear_velocity_ += linear_acceleration * dt;
+//   current_angular_velocity_ += angular_acceleration * dt;
+
+//   // 滑り（ドリフト）のシミュレーション - 正規分布ノイズを追加
+//   std::random_device rd;
+//   std::mt19937 gen(rd());
+//   std::normal_distribution<> drift_noise(0.0, drift_noise_std_dev);
+//   double drift_x = drift_noise(gen);
+//   double drift_y = drift_noise(gen);
+
+//   // 新しい位置を計算
+//   double delta_x = (current_linear_velocity_ * std::cos(yaw_) + drift_x) * dt;
+//   double delta_y = (current_linear_velocity_ * std::sin(yaw_) + drift_y) * dt;
+//   double delta_yaw = current_angular_velocity_ * dt;
+
+//   // 位置と姿勢の更新
+//   robot_x_ += delta_x;
+//   robot_y_ += delta_y;
+//   yaw_ += delta_yaw;
+
+//   // PoseStampedメッセージの更新
+//   geometry_msgs::msg::PoseStamped pose_msg;
+//   pose_msg.header.stamp = current_time;
+//   pose_msg.header.frame_id = "odom";
+//   pose_msg.pose.position.x = robot_x_;
+//   pose_msg.pose.position.y = robot_y_;
+//   pose_msg.pose.position.z = 0.0;
+
+//   // Quaternionを用いてYawからOrientationを設定
+//   tf2::Quaternion q;
+//   q.setRPY(0, 0, yaw_);
+//   pose_msg.pose.orientation.x = q.x();
+//   pose_msg.pose.orientation.y = q.y();
+//   pose_msg.pose.orientation.z = q.z();
+//   pose_msg.pose.orientation.w = q.w();
+
+//   // 更新された位置をパブリッシュ
+//   pose_publisher_->publish(pose_msg);
+// }
 
 }  // namespace occupancy_maze_simulator
 
