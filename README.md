@@ -13,8 +13,9 @@ ros2 run occupancy_maze_simulator occupancy_maze_simulator_node \
 --param gridmap.resolution:=1.0 \
 --param gridmap.x:=50.0 \
 --param gridmap.y:=50.0 \
---param start_position:=[1,1] \
---param goal_position:=[48,48]
+--param start_position:=[2,2] \
+--param goal_position:=[48,48] \
+--param maze.density:=0.1
 ```
 
 obstacle_mode: maze or random
