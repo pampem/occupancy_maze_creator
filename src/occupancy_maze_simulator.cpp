@@ -65,6 +65,7 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
 
   std::vector<Obstacle> obstacles;
   int count = 0;
+  bool path_exists = false;
   do {
     if (obstacle_mode == "maze") {
       obstacles = generate_maze_obstacles(cell_size_, {num_cells_x_, num_cells_y_});
@@ -76,7 +77,8 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
     }
 
     grid_map_ = create_grid_map(obstacles, {num_cells_x_, num_cells_y_}, cell_size_);
-    if (!is_path_to_goal(grid_map_, start_position_, goal_position_)) {
+    path_exists = is_path_to_goal(grid_map_, start_position_, goal_position_);
+    if (!path_exists) {
       RCLCPP_WARN(this->get_logger(), "No path to the goal exists. Regenerating obstacles.");
       ++count;
     }
@@ -84,10 +86,9 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
       RCLCPP_ERROR(this->get_logger(), "Couldn't create valid obstacles. Check your parameters.");
       return;
     }
-  } while (!is_path_to_goal(grid_map_, start_position_, goal_position_) && count < 100);
+  } while (!path_exists && count < 100);
   if (count < 100) {
     RCLCPP_INFO(this->get_logger(), "A path to the goal exists.");
-    // occupancy_grid_publisher_->publish(grid_map);  // 有効なGridmapをパブリッシュ
     publish_gridmap_timer_ = this->create_wall_timer(
       std::chrono::seconds(1), std::bind(&OccupancyMazeSimulator::publish_gridmap, this));
   }
@@ -132,8 +133,9 @@ bool OccupancyMazeSimulator::is_path_to_goal(
 
   std::vector<std::vector<bool>> visited(height, std::vector<bool>(width, false));
   std::queue<std::pair<int, int>> queue;
+
   queue.push(start);
-  visited[start.first][start.second] = true;
+  visited[start.second][start.first] = true;
 
   const int dx[] = {1, -1, 0, 0};
   const int dy[] = {0, 0, 1, -1};
@@ -152,9 +154,9 @@ bool OccupancyMazeSimulator::is_path_to_goal(
 
       if (
         nx >= 0 && nx < width && ny >= 0 && ny < height && data[ny * width + nx] == 0 &&
-        !visited[nx][ny]) {
+        !visited[ny][nx]) {
         queue.emplace(nx, ny);
-        visited[nx][ny] = true;
+        visited[ny][nx] = true;
       }
     }
   }
