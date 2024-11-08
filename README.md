@@ -19,3 +19,5 @@ ros2 run occupancy_maze_simulator occupancy_maze_simulator_node \
 ```
 
 obstacle_mode: maze or random
+
+![poem](doc/media/poemByCodeRabbit.png)

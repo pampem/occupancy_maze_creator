@@ -35,8 +35,22 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
   num_cells_x_ = static_cast<int>(gridmap_x / resolution);
   num_cells_y_ = static_cast<int>(gridmap_y / resolution);
   cell_size_ = resolution;
-  if (start_vec.size() == 2) start_position_ = {start_vec[0], start_vec[1]};
-  if (goal_vec.size() == 2) goal_position_ = {goal_vec[0], goal_vec[1]};
+
+  if (start_vec.size() == 2) {
+    start_position_ = {start_vec[0], start_vec[1]};
+  } else {
+    RCLCPP_ERROR(
+      this->get_logger(), "Invalid start_position parameter. Expected a list of two integers.");
+    rclcpp::shutdown();
+  }
+
+  if (goal_vec.size() == 2) {
+    goal_position_ = {goal_vec[0], goal_vec[1]};
+  } else {
+    RCLCPP_ERROR(
+      this->get_logger(), "Invalid goal_position parameter. Expected a list of two integers.");
+    rclcpp::shutdown();
+  }
 
   occupancy_grid_publisher_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>("gridmap", 10);
   pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("glim_ros/pose", 10);
@@ -68,14 +82,14 @@ OccupancyMazeSimulator::OccupancyMazeSimulator(const rclcpp::NodeOptions & optio
     }
     if (count >= 100) {
       RCLCPP_ERROR(this->get_logger(), "Couldn't create valid obstacles. Check your parameters.");
-      break;
+      return;
     }
-  } while (!is_path_to_goal(grid_map_, start_position_, goal_position_));
+  } while (!is_path_to_goal(grid_map_, start_position_, goal_position_) && count < 100);
   if (count < 100) {
     RCLCPP_INFO(this->get_logger(), "A path to the goal exists.");
     // occupancy_grid_publisher_->publish(grid_map);  // 有効なGridmapをパブリッシュ
     publish_gridmap_timer_ = this->create_wall_timer(
-    std::chrono::seconds(1), std::bind(&OccupancyMazeSimulator::publish_gridmap, this));
+      std::chrono::seconds(1), std::bind(&OccupancyMazeSimulator::publish_gridmap, this));
   }
   last_update_time_ = rclcpp::Clock(RCL_STEADY_TIME).now();
 }
@@ -116,7 +130,7 @@ bool OccupancyMazeSimulator::is_path_to_goal(
   const int height = grid_map.info.height;
   const auto & data = grid_map.data;
 
-  std::vector<std::vector<bool>> visited(width, std::vector<bool>(height, false));
+  std::vector<std::vector<bool>> visited(height, std::vector<bool>(width, false));
   std::queue<std::pair<int, int>> queue;
   queue.push(start);
   visited[start.first][start.second] = true;

@@ -59,7 +59,7 @@ Visualization Manager:
       Color Scheme: map
       Draw Behind: false
       Enabled: true
-      Name: Map
+      Name: Obstacle's Occupancy Grid Map
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -147,7 +147,7 @@ Visualization Manager:
       Color Scheme: map
       Draw Behind: false
       Enabled: true
-      Name: Map
+      Name: Current Robot Position Map
       Topic:
         Depth: 5
         Durability Policy: Volatile

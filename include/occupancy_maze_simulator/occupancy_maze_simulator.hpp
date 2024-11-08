@@ -57,8 +57,9 @@ private:
     const nav_msgs::msg::OccupancyGrid & grid_map, const std::pair<int, int> & start,
     const std::pair<int, int> & goal);
 
+  // Simple option to simulate robot movement (default)
   void simulate_robot_position(geometry_msgs::msg::Twist::SharedPtr msg);
-  // Alternative option to simulate robot movement
+  // Alternative option to simulate robot movement (currently not implemented)
   void simulate_drone_movement(geometry_msgs::msg::Twist::SharedPtr target_twist);
 
   void publish_pose();
@@ -67,7 +68,6 @@ private:
 
   rclcpp::TimerBase::SharedPtr publish_pose_timer_;
   rclcpp::TimerBase::SharedPtr publish_gridmap_timer_;
-  nav_msgs::msg::OccupancyGrid occupancy_grid_;
   rclcpp::Time last_update_time_;
 
   double yaw_;
